@@ -1,7 +1,6 @@
 import os
-import asyncio
-from telegram import Update
-from telegram.ext import Application, MessageHandler, filters, ContextTypes
+import time
+import requests
 
 BOT_TOKEN = os.environ.get('BOT_TOKEN')
 CHAT_ID = os.environ.get('CHAT_ID')
@@ -15,48 +14,53 @@ KEYWORDS = [
     'настройка таргета', 'таргетолог мебель', 'таргетолог фитнес',
 ]
 
-async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not update.message or not update.message.text:
-        return
+BASE_URL = f'https://api.telegram.org/bot{BOT_TOKEN}'
 
-    text = update.message.text.lower()
+def send_message(chat_id, text):
+    requests.post(f'{BASE_URL}/sendMessage', json={'chat_id': chat_id, 'text': text})
 
-    if any(kw in text for kw in KEYWORDS):
-        chat = update.message.chat
-        chat_name = chat.title or chat.username or 'Неизвестно'
-        msg_id = update.message.message_id
-
-        link = ''
-        if chat.username:
-            link = f'https://t.me/{chat.username}/{msg_id}'
-
-        forward_text = (
-            f'🎯 ЗАПРОС НА ТАРГЕТОЛОГА\n'
-            f'━━━━━━━━━━━━━━━━━━━━\n'
-            f'📌 Источник: {chat_name}\n'
-            f'🔗 Ссылка: {link}\n'
-            f'━━━━━━━━━━━━━━━━━━━━\n'
-            f'{update.message.text[:1000]}'
-        )
-
-        if CHAT_ID:
-            await context.bot.send_message(chat_id=CHAT_ID, text=forward_text)
-
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    chat_id = update.effective_chat.id
-    await update.message.reply_text(
-        f'✅ Монитор запущен!\n'
-        f'Твой Chat ID: {chat_id}\n\n'
-        f'Скопируй этот ID и добавь его в переменную CHAT_ID на Railway.'
-    )
+def get_updates(offset=None):
+    params = {'timeout': 30, 'allowed_updates': ['message']}
+    if offset:
+        params['offset'] = offset
+    try:
+        r = requests.get(f'{BASE_URL}/getUpdates', params=params, timeout=35)
+        return r.json()
+    except Exception as e:
+        print(f'Ошибка getUpdates: {e}')
+        return {'ok': False, 'result': []}
 
 def main():
-    app = Application.builder().token(BOT_TOKEN).build()
-    from telegram.ext import CommandHandler
-    app.add_handler(CommandHandler('start', start))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     print('Бот запущен!')
-    app.run_polling()
+    offset = None
+    while True:
+        data = get_updates(offset)
+        if not data.get('ok'):
+            time.sleep(5)
+            continue
+        for update in data.get('result', []):
+            offset = update['update_id'] + 1
+            msg = update.get('message')
+            if not msg or not msg.get('text'):
+                continue
+            text = msg['text'].lower()
+            if any(kw in text for kw in KEYWORDS):
+                chat = msg.get('chat', {})
+                chat_name = chat.get('title') or chat.get('username') or 'Неизвестно'
+                msg_id = msg.get('message_id', '')
+                username = chat.get('username', '')
+                link = f'https://t.me/{username}/{msg_id}' if username else ''
+                forward_text = (
+                    f'🎯 ЗАПРОС НА ТАРГЕТОЛОГА\n'
+                    f'━━━━━━━━━━━━━━━━━━━━\n'
+                    f'📌 Источник: {chat_name}\n'
+                    f'🔗 Ссылка: {link}\n'
+                    f'━━━━━━━━━━━━━━━━━━━━\n'
+                    f'{msg["text"][:1000]}'
+                )
+                if CHAT_ID:
+                    send_message(CHAT_ID, forward_text)
+                    print(f'Отправлено уведомление из {chat_name}')
 
 if __name__ == '__main__':
     main()
